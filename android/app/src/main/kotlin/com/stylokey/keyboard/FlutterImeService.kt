@@ -92,21 +92,36 @@ class FlutterImeService : InputMethodService() {
                             result.success(null)
                         }
                         "vibrate" -> {
+                            // level: 0=약(15ms), 1=중(25ms), 2=강(45ms)
+                            val level = call.argument<Int>("level") ?: 1
+                            val (durationMs, amplitude) = when (level) {
+                                0 -> Pair(12L, 60)
+                                2 -> Pair(45L, VibrationEffect.DEFAULT_AMPLITUDE)
+                                else -> Pair(25L, VibrationEffect.DEFAULT_AMPLITUDE)
+                            }
                             @Suppress("DEPRECATION")
                             val vibrator = getSystemService(VIBRATOR_SERVICE) as? Vibrator
                             vibrator?.let {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    it.vibrate(VibrationEffect.createOneShot(25, VibrationEffect.DEFAULT_AMPLITUDE))
+                                    it.vibrate(VibrationEffect.createOneShot(durationMs, amplitude))
                                 } else {
                                     @Suppress("DEPRECATION")
-                                    it.vibrate(25)
+                                    it.vibrate(durationMs)
                                 }
                             }
                             result.success(null)
                         }
                         "playKeySound" -> {
+                            // volume: 0.0~1.0, theme: 0=기본, 1=타자기, 2=부드러움
+                            val volume = (call.argument<Double>("volume") ?: 0.5).toFloat()
+                            val theme = call.argument<Int>("theme") ?: 0
+                            val soundEffect = when (theme) {
+                                1 -> AudioManager.FX_KEYPRESS_RETURN   // 타자기
+                                2 -> AudioManager.FX_KEYPRESS_SPACEBAR // 부드러움
+                                else -> AudioManager.FX_KEYPRESS_STANDARD // 기본
+                            }
                             val am = getSystemService(AUDIO_SERVICE) as? AudioManager
-                            am?.playSoundEffect(AudioManager.FX_KEYPRESS_STANDARD, -1f)
+                            am?.playSoundEffect(soundEffect, volume)
                             result.success(null)
                         }
                         else -> result.notImplemented()
@@ -126,8 +141,9 @@ class FlutterImeService : InputMethodService() {
         }
 
         // ── Wrap in a FrameLayout with a fixed keyboard height ──────────────
+        // Flutter SizedBox가 내부 높이를 제어하므로 최대치(440dp)로 설정
         val density = resources.displayMetrics.density
-        val keyboardHeight = (350 * density).toInt()
+        val keyboardHeight = (440 * density).toInt()
 
         // Android 15 edge-to-edge: 네비게이션 바 높이만큼 하단 패딩 추가
         val container = object : FrameLayout(this) {

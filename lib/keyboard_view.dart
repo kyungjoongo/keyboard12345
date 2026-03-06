@@ -186,6 +186,22 @@ class _KeyboardViewState extends State<KeyboardView> {
   bool _hapticEnabled = true;
   bool _soundEnabled = false;
   int _themeIndex = 0;
+  // 키보드 높이 (280~440dp)
+  int _keyboardHeight = 350;
+  // 숫자행 항상 표시
+  bool _showNumberRow = false;
+  // 한영 전환 방식: 0=탭, 1=길게누름
+  int _langToggleMode = 0;
+  // 진동 강도: 0=약, 1=중, 2=강
+  int _hapticLevel = 1;
+  // 소리 볼륨 (0.0~1.0)
+  double _soundVolume = 0.5;
+  // 소리 테마: 0=기본, 1=타자기, 2=부드러움
+  int _soundTheme = 0;
+
+  // ── Clipboard ─────────────────────────────────────────────────────────────
+  List<String> _clipboardHistory = [];
+  bool _showingClipboard = false;
 
   // ── Emoji ─────────────────────────────────────────────────────────────────
   int _emojiCategoryIndex = 0;
@@ -243,6 +259,13 @@ class _KeyboardViewState extends State<KeyboardView> {
         _hapticEnabled = prefs.getBool('haptic') ?? true;
         _soundEnabled = prefs.getBool('sound') ?? false;
         _themeIndex = prefs.getInt('theme') ?? 0;
+        _keyboardHeight = prefs.getInt('keyboardHeight') ?? 350;
+        _showNumberRow = prefs.getBool('showNumberRow') ?? false;
+        _langToggleMode = prefs.getInt('langToggleMode') ?? 0;
+        _hapticLevel = prefs.getInt('hapticLevel') ?? 1;
+        _soundVolume = prefs.getDouble('soundVolume') ?? 0.5;
+        _soundTheme = prefs.getInt('soundTheme') ?? 0;
+        _clipboardHistory = prefs.getStringList('clipboardHistory') ?? [];
       });
     } catch (_) {
       // 프리뷰 모드 등 플러그인 미등록 환경에서는 기본값 사용
@@ -259,10 +282,53 @@ class _KeyboardViewState extends State<KeyboardView> {
     await prefs.setInt(key, value);
   }
 
+  Future<void> _saveDouble(String key, double value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(key, value);
+  }
+
   void _triggerFeedback() {
     if (_isPreview) return;
-    if (_hapticEnabled) _channel.invokeMethod('vibrate');
-    if (_soundEnabled) _channel.invokeMethod('playKeySound');
+    if (_hapticEnabled) _channel.invokeMethod('vibrate', {'level': _hapticLevel});
+    if (_soundEnabled) _channel.invokeMethod('playKeySound', {
+      'volume': _soundVolume,
+      'theme': _soundTheme,
+    });
+  }
+
+  // ── Clipboard ─────────────────────────────────────────────────────────────
+
+  Future<void> _openClipboard() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      if (data?.text != null && data!.text!.isNotEmpty) {
+        _addToClipboardHistory(data.text!);
+      }
+    } catch (_) {}
+    setState(() {
+      _showingClipboard = true;
+      _showingSettings = false;
+    });
+  }
+
+  void _addToClipboardHistory(String text) {
+    if (text.length > 300) return; // 너무 긴 텍스트 제외
+    _clipboardHistory.remove(text); // 중복 제거 후 최신으로 추가
+    _clipboardHistory.add(text);
+    if (_clipboardHistory.length > 20) _clipboardHistory.removeAt(0);
+    _saveClipboardHistory();
+  }
+
+  Future<void> _saveClipboardHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('clipboardHistory', _clipboardHistory);
+    } catch (_) {}
+  }
+
+  Future<void> _clearClipboardHistory() async {
+    setState(() => _clipboardHistory.clear());
+    await _saveClipboardHistory();
   }
 
   // ── Tap detection ─────────────────────────────────────────────────────────
@@ -286,6 +352,8 @@ class _KeyboardViewState extends State<KeyboardView> {
   };
 
   // ── Layout definitions ────────────────────────────────────────────────────
+
+  static const _numberRow = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 
   static const _numberRows = [
     ['1', '2', '3', '*', '+', '/'],
@@ -561,23 +629,25 @@ class _KeyboardViewState extends State<KeyboardView> {
       duration: const Duration(milliseconds: 200),
       color: _theme.background,
       child: SizedBox(
-        height: 350,
+        height: _keyboardHeight.toDouble(),
         child: Column(
           children: [
-            // ── 상단 툴바: 이모지 · 설정 ──────────────────────────────
-            if (!_showingSettings) _buildToolbar(),
+            // ── 상단 툴바: 이모지 · 클립보드 · 설정 ──────────────────────
+            if (!_showingSettings && !_showingClipboard) _buildToolbar(),
             Expanded(
               child: _showingSettings
                   ? _buildSettingsPanel()
-                  : Column(
-                      children: [
-                        if (_mode == KeyboardMode.emoji)
-                          Expanded(child: _buildEmojiGrid())
-                        else
-                          ..._buildMainRows(),
-                        _buildBottomRow(),
-                      ],
-                    ),
+                  : _showingClipboard
+                      ? _buildClipboardPanel()
+                      : Column(
+                          children: [
+                            if (_mode == KeyboardMode.emoji)
+                              Expanded(child: _buildEmojiGrid())
+                            else
+                              ..._buildMainRows(),
+                            _buildBottomRow(),
+                          ],
+                        ),
             ),
           ],
         ),
@@ -598,10 +668,23 @@ class _KeyboardViewState extends State<KeyboardView> {
             behavior: HitTestBehavior.opaque,
             onTap: _toggleEmoji,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Text(
                 isEmoji ? '⌨️' : '😊',
                 style: const TextStyle(fontSize: 17),
+              ),
+            ),
+          ),
+          // 클립보드
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _openClipboard,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Icon(
+                Icons.content_paste_rounded,
+                size: 16,
+                color: _theme.charKeyText.withOpacity(0.5),
               ),
             ),
           ),
@@ -611,7 +694,7 @@ class _KeyboardViewState extends State<KeyboardView> {
             behavior: HitTestBehavior.opaque,
             onTap: () => setState(() => _showingSettings = true),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: Icon(Icons.settings, size: 17, color: _theme.charKeyText.withOpacity(0.5)),
             ),
           ),
@@ -688,13 +771,143 @@ class _KeyboardViewState extends State<KeyboardView> {
     );
   }
 
+  // ── Clipboard panel ───────────────────────────────────────────────────────
+
+  Widget _buildClipboardPanel() {
+    final reversed = _clipboardHistory.reversed.toList();
+    return Column(
+      children: [
+        // Header
+        Container(
+          height: 38,
+          color: _theme.actionKey.withOpacity(0.15),
+          child: Row(
+            children: [
+              GestureDetector(
+                onTap: () => setState(() => _showingClipboard = false),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Icon(Icons.arrow_back, size: 18, color: _theme.charKeyText),
+                ),
+              ),
+              Text(
+                '클립보드',
+                style: TextStyle(
+                  color: _theme.charKeyText,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: _clearClipboardHistory,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: _theme.charKeyText.withOpacity(0.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // History list
+        Expanded(
+          child: reversed.isEmpty
+              ? Center(
+                  child: Text(
+                    '클립보드 기록 없음',
+                    style: TextStyle(
+                      color: _theme.charKeyText.withOpacity(0.4),
+                      fontSize: 13,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  itemCount: reversed.length,
+                  itemBuilder: (_, i) {
+                    final item = reversed[i];
+                    return GestureDetector(
+                      onTap: () {
+                        _commitText(item);
+                        _triggerFeedback();
+                        setState(() => _showingClipboard = false);
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: _theme.charKey,
+                          borderRadius: BorderRadius.circular(6),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 2,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          item,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: _theme.charKeyText, fontSize: 13),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        _buildBottomRow(),
+      ],
+    );
+  }
+
   // ── Settings panel ────────────────────────────────────────────────────────
+
+  Widget _settingLabel(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 12, color: _theme.charKeyText.withOpacity(0.55)),
+      ),
+    );
+  }
+
+  Widget _segmentButton(String label, int value, int current, void Function(int) onTap) {
+    final selected = value == current;
+    return GestureDetector(
+      onTap: () => onTap(value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? _theme.actionKey : _theme.charKey,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: _theme.actionKey.withOpacity(0.4), width: 1),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            color: selected ? _theme.actionKeyText : _theme.charKeyText,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _buildSettingsPanel() {
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Header
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
             child: Row(
@@ -712,16 +925,11 @@ class _KeyboardViewState extends State<KeyboardView> {
               ],
             ),
           ),
+
+          // ── 키보드 스킨 ───────────────────────────────────────────────────
+          _settingLabel('키보드 스킨'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Text('키보드 스킨',
-                style: TextStyle(
-                    fontSize: 13,
-                    color: _theme.charKeyText.withOpacity(0.6))),
-          ),
-          Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: List.generate(KeyboardTheme.presets.length, (i) {
@@ -734,58 +942,206 @@ class _KeyboardViewState extends State<KeyboardView> {
                   },
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
-                    width: 44,
-                    height: 44,
+                    width: 40,
+                    height: 40,
                     decoration: BoxDecoration(
                       color: t.swatch,
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: selected
-                            ? Colors.black54
-                            : Colors.transparent,
+                        color: selected ? Colors.black54 : Colors.transparent,
                         width: 3,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black
-                              .withOpacity(selected ? 0.3 : 0.1),
+                          color: Colors.black.withOpacity(selected ? 0.3 : 0.1),
                           blurRadius: selected ? 6 : 2,
                           offset: const Offset(0, 2),
                         ),
                       ],
                     ),
                     child: selected
-                        ? const Icon(Icons.check,
-                            color: Colors.white, size: 20)
+                        ? const Icon(Icons.check, color: Colors.white, size: 18)
                         : null,
                   ),
                 );
               }),
             ),
           ),
-          const Divider(height: 16),
+          const Divider(height: 8),
+
+          // ── 키보드 높이 ───────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('키보드 높이',
+                    style: TextStyle(fontSize: 15, color: _theme.charKeyText)),
+                Text('$_keyboardHeight dp',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: _theme.charKeyText.withOpacity(0.6))),
+              ],
+            ),
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: _theme.actionKey,
+              thumbColor: _theme.actionKey,
+              inactiveTrackColor: _theme.actionKey.withOpacity(0.2),
+              overlayColor: _theme.actionKey.withOpacity(0.1),
+            ),
+            child: Slider(
+              value: _keyboardHeight.toDouble(),
+              min: 280,
+              max: 440,
+              divisions: 8,
+              onChanged: (v) {
+                setState(() => _keyboardHeight = v.round());
+                _saveInt('keyboardHeight', v.round());
+              },
+            ),
+          ),
+          const Divider(height: 8),
+
+          // ── 숫자행 표시 ───────────────────────────────────────────────────
+          SwitchListTile(
+            dense: true,
+            title: Text('숫자행 항상 표시',
+                style: TextStyle(fontSize: 15, color: _theme.charKeyText)),
+            activeColor: _theme.actionKey,
+            value: _showNumberRow,
+            onChanged: (v) {
+              setState(() => _showNumberRow = v);
+              _saveBool('showNumberRow', v);
+            },
+          ),
+          const Divider(height: 8),
+
+          // ── 한영 전환 방식 ────────────────────────────────────────────────
+          _settingLabel('한영 전환 방식'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Row(
+              children: [
+                _segmentButton('탭', 0, _langToggleMode, (v) {
+                  setState(() => _langToggleMode = v);
+                  _saveInt('langToggleMode', v);
+                }),
+                const SizedBox(width: 8),
+                _segmentButton('길게 누름', 1, _langToggleMode, (v) {
+                  setState(() => _langToggleMode = v);
+                  _saveInt('langToggleMode', v);
+                }),
+              ],
+            ),
+          ),
+          const Divider(height: 8),
+
+          // ── 진동 ──────────────────────────────────────────────────────────
           SwitchListTile(
             dense: true,
             title: Text('진동',
-                style:
-                    TextStyle(fontSize: 15, color: _theme.charKeyText)),
+                style: TextStyle(fontSize: 15, color: _theme.charKeyText)),
+            activeColor: _theme.actionKey,
             value: _hapticEnabled,
             onChanged: (v) {
               setState(() => _hapticEnabled = v);
               _saveBool('haptic', v);
             },
           ),
+          if (_hapticEnabled) ...[
+            _settingLabel('진동 강도'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Row(
+                children: [
+                  _segmentButton('약', 0, _hapticLevel, (v) {
+                    setState(() => _hapticLevel = v);
+                    _saveInt('hapticLevel', v);
+                  }),
+                  const SizedBox(width: 8),
+                  _segmentButton('중', 1, _hapticLevel, (v) {
+                    setState(() => _hapticLevel = v);
+                    _saveInt('hapticLevel', v);
+                  }),
+                  const SizedBox(width: 8),
+                  _segmentButton('강', 2, _hapticLevel, (v) {
+                    setState(() => _hapticLevel = v);
+                    _saveInt('hapticLevel', v);
+                  }),
+                ],
+              ),
+            ),
+          ],
+          const Divider(height: 8),
+
+          // ── 소리 ──────────────────────────────────────────────────────────
           SwitchListTile(
             dense: true,
             title: Text('키 클릭 소리',
-                style:
-                    TextStyle(fontSize: 15, color: _theme.charKeyText)),
+                style: TextStyle(fontSize: 15, color: _theme.charKeyText)),
+            activeColor: _theme.actionKey,
             value: _soundEnabled,
             onChanged: (v) {
               setState(() => _soundEnabled = v);
               _saveBool('sound', v);
             },
           ),
+          if (_soundEnabled) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('볼륨',
+                      style: TextStyle(fontSize: 15, color: _theme.charKeyText)),
+                  Text('${(_soundVolume * 100).round()}%',
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: _theme.charKeyText.withOpacity(0.6))),
+                ],
+              ),
+            ),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: _theme.actionKey,
+                thumbColor: _theme.actionKey,
+                inactiveTrackColor: _theme.actionKey.withOpacity(0.2),
+                overlayColor: _theme.actionKey.withOpacity(0.1),
+              ),
+              child: Slider(
+                value: _soundVolume,
+                onChanged: (v) {
+                  setState(() => _soundVolume = v);
+                  _saveDouble('soundVolume', v);
+                },
+              ),
+            ),
+            _settingLabel('소리 테마'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Row(
+                children: [
+                  _segmentButton('기본', 0, _soundTheme, (v) {
+                    setState(() => _soundTheme = v);
+                    _saveInt('soundTheme', v);
+                  }),
+                  const SizedBox(width: 8),
+                  _segmentButton('타자기', 1, _soundTheme, (v) {
+                    setState(() => _soundTheme = v);
+                    _saveInt('soundTheme', v);
+                  }),
+                  const SizedBox(width: 8),
+                  _segmentButton('부드러움', 2, _soundTheme, (v) {
+                    setState(() => _soundTheme = v);
+                    _saveInt('soundTheme', v);
+                  }),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
         ],
       ),
     );
@@ -800,22 +1156,33 @@ class _KeyboardViewState extends State<KeyboardView> {
       KeyboardMode.english => _englishRows,
       KeyboardMode.emoji => _koreanRows,
     };
-    return rows
-        .map((row) => Expanded(
-              child: _KeyRow(
-                keys: row,
-                caps: _capsLock && _mode == KeyboardMode.english,
-                bold: _mode == KeyboardMode.korean,
-                onKey: _onKey,
-                onKeyDown: _triggerFeedback,
-                theme: _theme,
-              ),
-            ))
-        .toList();
+    return [
+      // 숫자행 (숫자 모드에선 중복이므로 제외)
+      if (_showNumberRow && _mode != KeyboardMode.number)
+        Expanded(
+          child: _KeyRow(
+            keys: _numberRow,
+            caps: false,
+            bold: false,
+            onKey: _onKey,
+            onKeyDown: _triggerFeedback,
+            theme: _theme,
+          ),
+        ),
+      ...rows.map((row) => Expanded(
+            child: _KeyRow(
+              keys: row,
+              caps: _capsLock && _mode == KeyboardMode.english,
+              bold: _mode == KeyboardMode.korean,
+              onKey: _onKey,
+              onKeyDown: _triggerFeedback,
+              theme: _theme,
+            ),
+          )),
+    ];
   }
 
   Widget _buildBottomRow() {
-    final isEmoji = _mode == KeyboardMode.emoji;
     final isKorean = _mode == KeyboardMode.korean;
     final isEnglish = _mode == KeyboardMode.english;
     final langLabel = isEnglish ? 'EN' : '한';
@@ -824,8 +1191,10 @@ class _KeyboardViewState extends State<KeyboardView> {
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
       child: Row(
         children: [
+          // 한영 전환: 탭 모드(0) vs 길게누름 모드(1)
           _ActionKey(
-            onTap: _onLangToggle,
+            onTap: _langToggleMode == 0 ? _onLangToggle : () {},
+            onLongPress: _langToggleMode == 1 ? _onLangToggle : null,
             onTapDown: _triggerFeedback,
             theme: _theme,
             flex: 2,
@@ -1118,6 +1487,7 @@ class _ActionKey extends StatefulWidget {
   final int flex;
   final bool active;
   final bool repeatOnHold;
+  final VoidCallback? onLongPress;
 
   const _ActionKey({
     required this.child,
@@ -1127,6 +1497,7 @@ class _ActionKey extends StatefulWidget {
     this.flex = 1,
     this.active = false,
     this.repeatOnHold = false,
+    this.onLongPress,
   });
 
   @override
@@ -1225,6 +1596,15 @@ class _ActionKeyState extends State<_ActionKey>
             _ctrl.reverse();
             if (widget.repeatOnHold) _cancelRepeat();
           },
+          // 길게누름 지원
+          onLongPress: widget.onLongPress != null ? () {
+            widget.onTapDown();
+            widget.onLongPress!();
+          } : null,
+          onLongPressEnd: widget.onLongPress != null ? (_) {
+            setState(() => _pressed = false);
+            _ctrl.reverse();
+          } : null,
           child: AnimatedBuilder(
             animation: _curve,
             builder: (ctx, child) {
