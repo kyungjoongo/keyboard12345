@@ -245,6 +245,8 @@ class _KeyboardViewState extends State<KeyboardView> {
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     if (call.method == 'reset') {
       _composer.reset();
+      _mode = KeyboardMode.korean;
+      _modeBeforeEmoji = KeyboardMode.korean;
       _lastKey = null;
       _tapCount = 0;
       _ssangMode = false;
@@ -1226,6 +1228,7 @@ class _KeyboardViewState extends State<KeyboardView> {
   Widget _buildBottomRow() {
     final isKorean = _mode == KeyboardMode.korean;
     final isEnglish = _mode == KeyboardMode.english;
+<<<<<<< HEAD
 
     // 현재 모드에 맞는 레이블
     final String modeLabel;
@@ -1240,11 +1243,20 @@ class _KeyboardViewState extends State<KeyboardView> {
     } else {
       modeLabel = '한';
     }
+=======
+    final modeLabel = switch (_mode) {
+      KeyboardMode.korean => '한',
+      KeyboardMode.english => 'EN',
+      KeyboardMode.number => '123',
+      KeyboardMode.emoji => '한',
+    };
+>>>>>>> a678572 (feat: 삭제키 롱프레스 빠른 삭제 및 한영/숫자 모드 버튼 통합)
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
       child: Row(
         children: [
+<<<<<<< HEAD
           // 한 / EN / 123 순환 버튼 (합쳐진)
           _ActionKey(
             onTap: _onRotate,
@@ -1267,6 +1279,22 @@ class _KeyboardViewState extends State<KeyboardView> {
                 const SizedBox(width: 2),
                 Icon(Icons.autorenew, size: 13, color: _theme.actionKeyText),
               ],
+=======
+          // 한/영/숫자 모드 순환 (탭 모드(0) vs 길게누름 모드(1))
+          _ActionKey(
+            onTap: _langToggleMode == 0 ? _onRotate : () {},
+            onLongPress: _langToggleMode == 1 ? _onRotate : null,
+            onTapDown: _triggerFeedback,
+            theme: _theme,
+            flex: 4,
+            child: Text(
+              modeLabel,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: _theme.actionKeyText,
+              ),
+>>>>>>> a678572 (feat: 삭제키 롱프레스 빠른 삭제 및 한영/숫자 모드 버튼 통합)
             ),
           ),
           // 쌍자음(한국어) / 대문자(영어) / 빈칸(그 외)
@@ -1606,19 +1634,16 @@ class _ActionKeyState extends State<_ActionKey>
   }
 
   void _startRepeat() {
-    _repeatFired = false;
-    _repeatTimer = Timer(const Duration(milliseconds: 400), () {
-      if (!mounted) return;
-      _repeatFired = true;
+    if (_repeatFired) return;
+    _repeatFired = true;
+    widget.onTap();
+    _repeatTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (!mounted) {
+        _repeatTimer?.cancel();
+        return;
+      }
+      widget.onTapDown();
       widget.onTap();
-      _repeatTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-        if (!mounted) {
-          _repeatTimer?.cancel();
-          return;
-        }
-        widget.onTapDown();
-        widget.onTap();
-      });
     });
   }
 
@@ -1646,12 +1671,18 @@ class _ActionKeyState extends State<_ActionKey>
           behavior: HitTestBehavior.opaque,
           onTapDown: (_) {
             widget.onTapDown();
+<<<<<<< HEAD
             if (widget.animate) _ctrl.forward();
             if (widget.repeatOnHold) {
               _startRepeat();
             } else {
               widget.onTap();
             }
+=======
+            setState(() => _pressed = true);
+            _ctrl.forward();
+            if (widget.repeatOnHold) _repeatFired = false;
+>>>>>>> a678572 (feat: 삭제키 롱프레스 빠른 삭제 및 한영/숫자 모드 버튼 통합)
           },
           onTapUp: (_) {
             if (widget.animate) _ctrl.reverse();
@@ -1665,6 +1696,7 @@ class _ActionKeyState extends State<_ActionKey>
             if (widget.animate) _ctrl.reverse();
             if (widget.repeatOnHold) _cancelRepeat();
           },
+<<<<<<< HEAD
           // 길게누름 지원
           onLongPress: widget.onLongPress != null ? () {
             widget.onTapDown();
@@ -1672,6 +1704,18 @@ class _ActionKeyState extends State<_ActionKey>
           } : null,
           onLongPressEnd: widget.onLongPress != null ? (_) {
             if (widget.animate) _ctrl.reverse();
+=======
+          // 길게누름 지원 (repeatOnHold: 빠른 반복 삭제 / onLongPress: 커스텀 액션)
+          onLongPress: widget.repeatOnHold ? _startRepeat
+              : (widget.onLongPress != null ? () {
+                  widget.onTapDown();
+                  widget.onLongPress!();
+                } : null),
+          onLongPressEnd: (widget.repeatOnHold || widget.onLongPress != null) ? (_) {
+            setState(() => _pressed = false);
+            _ctrl.reverse();
+            if (widget.repeatOnHold) _cancelRepeat();
+>>>>>>> a678572 (feat: 삭제키 롱프레스 빠른 삭제 및 한영/숫자 모드 버튼 통합)
           } : null,
           child: RepaintBoundary( // 액션키 애니메이션 격리
             child: AnimatedBuilder(
