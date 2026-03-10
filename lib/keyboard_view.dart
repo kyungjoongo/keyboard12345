@@ -662,11 +662,13 @@ class _KeyboardViewState extends State<KeyboardView> {
 
   @override
   Widget build(BuildContext context) {
+    // 네비게이션 바 높이: edge-to-edge 기기에서 키보드 하단 키가 가려지지 않도록
+    final navBottom = MediaQuery.of(context).viewPadding.bottom;
     return SizedBox(
       height: _keyboardHeight.toDouble(),
       child: Container(
-      color: _theme.background,
-      child: Column(
+        color: _theme.background,
+        child: Column(
           children: [
             // ── 상단 툴바: 이모지 · 클립보드 · 설정 ──────────────────────
             if (!_showingSettings && !_showingClipboard) _buildToolbar(),
@@ -685,8 +687,10 @@ class _KeyboardViewState extends State<KeyboardView> {
                           ],
                         ),
             ),
+            // 네비게이션 바 영역 (키가 가려지지 않도록 여백 확보)
+            if (navBottom > 0) SizedBox(height: navBottom),
           ],
-      ),
+        ),
       ),
     );
   }
