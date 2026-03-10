@@ -172,21 +172,8 @@ class FlutterImeService : InputMethodService() {
         val storedHeightDp = prefs.getInt("flutter.keyboardHeight", 350)
         val keyboardHeight = (storedHeightDp * density).toInt()
 
-        // Android 15 edge-to-edge: 네비게이션 바 높이만큼 하단 패딩 추가
-        val container = object : FrameLayout(this) {
-            override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
-                val navBottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    insets.getInsets(WindowInsets.Type.navigationBars()).bottom
-                } else {
-                    @Suppress("DEPRECATION")
-                    insets.systemWindowInsetBottom
-                }
-                setPadding(0, 0, 0, navBottom)
-                return insets
-            }
-        }
-        // 투명 배경: 키보드 위쪽 영역이 앱을 가리지 않도록
-        container.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        // IME 윈도우 높이를 keyboardHeight로만 고정 (네비게이션 바 패딩 추가 시 앱 화면을 과도하게 가림)
+        val container = FrameLayout(this)
         container.addView(
             flutterView,
             FrameLayout.LayoutParams(
