@@ -8,6 +8,7 @@ import android.os.Vibrator
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import android.os.Handler
@@ -196,6 +197,24 @@ class FlutterImeService : InputMethodService() {
         }
     }
 
+    private fun getNavBarHeightDp(): Int {
+        return try {
+            val density = resources.displayMetrics.density
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val wm = getSystemService(WINDOW_SERVICE) as? WindowManager
+                    ?: return 0
+                val insets = wm.currentWindowMetrics.windowInsets
+                val navInsets = insets.getInsets(WindowInsets.Type.navigationBars())
+                (navInsets.bottom / density).toInt()
+            } else {
+                val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+                if (resourceId > 0) (resources.getDimensionPixelSize(resourceId) / density).toInt() else 0
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         flutterEngine?.lifecycleChannel?.appIsResumed()
@@ -205,6 +224,11 @@ class FlutterImeService : InputMethodService() {
         val prefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
         val heightDp = prefs.getInt("flutter.keyboardHeight", 350)
         updateViewHeight(heightDp)
+        // 네비게이션 바 높이를 Flutter에 전달 (Flutter 엔진 준비 후 전송)
+        val navHeight = getNavBarHeightDp()
+        mainHandler.postDelayed({
+            channel?.invokeMethod("setNavBarHeight", mapOf("height" to navHeight))
+        }, 200)
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {

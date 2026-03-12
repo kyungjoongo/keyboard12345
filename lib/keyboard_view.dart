@@ -187,7 +187,7 @@ class _KeyboardViewState extends State<KeyboardView> {
   bool _soundEnabled = false;
   int _themeIndex = 0;
   // 키보드 높이 (280~440dp)
-  int _keyboardHeight = 350;
+  int _keyboardHeight = 430;
   // 숫자행 항상 표시
   bool _showNumberRow = false;
   // 한영 전환 방식: 0=탭, 1=길게누름
@@ -211,6 +211,9 @@ class _KeyboardViewState extends State<KeyboardView> {
   static const Map<String, String> _ssangMap = {
     'ㄱ': 'ㄲ', 'ㄷ': 'ㄸ', 'ㅂ': 'ㅃ', 'ㅅ': 'ㅆ', 'ㅈ': 'ㅉ',
   };
+
+  // ── Nav bar height (from native Android, since viewPadding.bottom = 0 in IME) ──
+  double _nativeNavBarHeight = 0;
 
   // ── Preview mode ──────────────────────────────────────────────────────────
   bool get _isPreview => widget.previewController != null;
@@ -251,13 +254,16 @@ class _KeyboardViewState extends State<KeyboardView> {
       _tapCount = 0;
       _ssangMode = false;
       setState(() {});
+    } else if (call.method == 'setNavBarHeight') {
+      final h = (call.arguments as Map)['height'] as int? ?? 0;
+      setState(() => _nativeNavBarHeight = h.toDouble());
     }
   }
 
   Future<void> _loadSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final height = prefs.getInt('keyboardHeight') ?? 350;
+      final height = prefs.getInt('keyboardHeight') ?? 430;
       setState(() {
         _hapticEnabled = prefs.getBool('haptic') ?? true;
         _soundEnabled = prefs.getBool('sound') ?? false;
@@ -662,8 +668,8 @@ class _KeyboardViewState extends State<KeyboardView> {
 
   @override
   Widget build(BuildContext context) {
-    // 네비게이션 바 높이: edge-to-edge 기기에서 키보드 하단 키가 가려지지 않도록
-    final navBottom = MediaQuery.of(context).viewPadding.bottom;
+    // 네비게이션 바 높이: IME 컨텍스트에서 viewPadding은 0이므로 네이티브에서 받은 값 사용
+    final navBottom = _nativeNavBarHeight;
     return SizedBox(
       height: _keyboardHeight.toDouble(),
       child: Container(
@@ -688,7 +694,8 @@ class _KeyboardViewState extends State<KeyboardView> {
                         ),
             ),
             // 네비게이션 바 영역 (키가 가려지지 않도록 여백 확보)
-            if (navBottom > 0) SizedBox(height: navBottom),
+            if (navBottom > 0)
+              Container(height: navBottom, color: Colors.black),
           ],
         ),
       ),
@@ -1344,7 +1351,7 @@ class _KeyRow extends StatelessWidget {
     // 키가 많을수록 가로 패딩 축소 (영문 10개 → 1px, 한글 5개 → 3px)
     final keyPad = keys.length >= 8 ? 1.0 : 3.0;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
       child: Row(
         children: keys
             .map((k) => Expanded(
@@ -1678,7 +1685,7 @@ class _ActionKeyState extends State<_ActionKey>
                     ..scale(1.0 - 0.09 * t),
                   alignment: Alignment.center,
                   child: Container(
-                    height: 65,
+                    height: 58,
                     decoration: BoxDecoration(
                       color: _bgColor(tC),
                       borderRadius: BorderRadius.circular(5),
