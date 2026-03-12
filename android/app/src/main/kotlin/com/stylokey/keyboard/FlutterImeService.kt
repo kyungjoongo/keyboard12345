@@ -220,7 +220,9 @@ class FlutterImeService : InputMethodService() {
         super.onStartInputView(info, restarting)
         flutterEngine?.lifecycleChannel?.appIsResumed()
         // 새 입력 필드 포커스 시 Flutter 컴포저 상태 초기화
-        channel?.invokeMethod("reset", null)
+        // imeAction도 함께 전달하여 엔터키 동작을 앱에 맞게 자동 전환
+        val imeAction = (info?.imeOptions ?: EditorInfo.IME_ACTION_NONE) and EditorInfo.IME_MASK_ACTION
+        channel?.invokeMethod("reset", mapOf("imeAction" to imeAction))
         // 설정에서 높이가 바뀌었을 수 있으므로 매번 동기화
         val prefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
         val heightDp = prefs.getLong("flutter.keyboardHeight", 350L).toInt()

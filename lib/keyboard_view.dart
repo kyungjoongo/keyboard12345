@@ -163,7 +163,7 @@ const _emojiData = [
 
 // ── Keyboard ───────────────────────────────────────────────────────────────────
 
-enum KeyboardMode { english, korean, number, emoji }
+enum KeyboardMode { english, korean, number, emoji, symbol }
 
 class KeyboardView extends StatefulWidget {
   /// 제공하면 MethodChannel 대신 이 컨트롤러에 직접 텍스트를 기록합니다 (프리뷰 모드).
@@ -180,6 +180,10 @@ class _KeyboardViewState extends State<KeyboardView> {
   KeyboardMode _modeBeforeEmoji = KeyboardMode.korean;
   bool _capsLock = false;
   final KoreanComposer _composer = KoreanComposer();
+
+  // ── IME Action (앱이 요청하는 엔터키 동작) ─────────────────────────────
+  // 0=NONE(줄바꿈), 1=NONE, 2=GO, 3=SEARCH, 4=SEND, 5=NEXT, 6=DONE
+  int _imeAction = 0;
 
   // ── Settings ──────────────────────────────────────────────────────────────
   bool _showingSettings = false;
@@ -253,6 +257,8 @@ class _KeyboardViewState extends State<KeyboardView> {
       _lastKey = null;
       _tapCount = 0;
       _ssangMode = false;
+      final args = call.arguments as Map?;
+      _imeAction = (args?['imeAction'] as int?) ?? 0;
       setState(() {});
     } else if (call.method == 'setNavBarHeight') {
       final h = (call.arguments as Map)['height'] as int? ?? 0;
@@ -393,34 +399,40 @@ class _KeyboardViewState extends State<KeyboardView> {
     ['@', 'z', 'x', 'c', 'v', 'b', 'n', 'm', '.,', '?'],
   ];
 
+  static const _symbolRows = [
+    ['!', '@', '#', '\$', '%', '^', '&', '*', '(', ')'],
+    ['-', '_', '=', '+', '[', ']', '{', '}', '\\', '|'],
+    ['`', '~', ';', ':', '"', "'", '<', '>', '/', '?'],
+  ];
+
   // ── IME communication ─────────────────────────────────────────────────────
 
-  Future<void> _commitText(String text) async {
+  void _commitText(String text) {
     if (text.isEmpty) return;
     if (_isPreview) {
       setState(() => _previewUpdate(_previewBase + text, ''));
     } else {
-      await _channel.invokeMethod('commitText', {'text': text});
+      _channel.invokeMethod('commitText', {'text': text});
     }
   }
 
-  Future<void> _setComposing(String text) async {
+  void _setComposing(String text) {
     if (_isPreview) {
       setState(() => _previewUpdate(_previewBase, text));
     } else {
-      await _channel.invokeMethod('setComposingText', {'text': text});
+      _channel.invokeMethod('setComposingText', {'text': text});
     }
   }
 
-  Future<void> _replaceComposing(String text) async {
+  void _replaceComposing(String text) {
     if (_isPreview) {
       setState(() => _previewUpdate(_previewBase, text));
     } else {
-      await _channel.invokeMethod('replaceComposing', {'text': text});
+      _channel.invokeMethod('replaceComposing', {'text': text});
     }
   }
 
-  Future<void> _deleteBack() async {
+  void _deleteBack() {
     if (_isPreview) {
       setState(() {
         if (_previewComposing.isNotEmpty) {
@@ -431,25 +443,29 @@ class _KeyboardViewState extends State<KeyboardView> {
         }
       });
     } else {
-      await _channel.invokeMethod('deleteSurroundingText');
+      _channel.invokeMethod('deleteSurroundingText');
     }
   }
 
-  Future<void> _sendAction() async {
+  void _sendAction() {
     // 조합 중인 한글 먼저 커밋
     String koreanText = '';
     if (_mode == KeyboardMode.korean) {
       koreanText = _composer.commitAll();
       if (koreanText.isNotEmpty && !_isPreview) {
-        await _channel.invokeMethod('switchModeCommit', {'text': koreanText});
+        _channel.invokeMethod('switchModeCommit', {'text': koreanText});
       }
     }
     _lastKey = null;
     _tapCount = 0;
     if (_isPreview) {
       setState(() => _previewUpdate('$_previewBase$koreanText\n', ''));
+    } else if (_imeAction == 0 || _imeAction == 1) {
+      // IME_ACTION_UNSPECIFIED(0) / IME_ACTION_NONE(1): 줄바꿈
+      _channel.invokeMethod('commitText', {'text': '\n'});
     } else {
-      await _channel.invokeMethod('performEditorAction');
+      // GO(2), SEARCH(3), SEND(4), NEXT(5), DONE(6): 앱 요청 액션 수행
+      _channel.invokeMethod('performEditorAction');
     }
   }
 
@@ -477,7 +493,7 @@ class _KeyboardViewState extends State<KeyboardView> {
     }
   }
 
-  Future<void> _handleNumberDouble(String key) async {
+  void _handleNumberDouble(String key) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final isDouble = _lastKey == key && (nowMs - _lastKeyMs) < _doubleTapMs;
     _lastKey = key;
@@ -485,14 +501,14 @@ class _KeyboardViewState extends State<KeyboardView> {
 
     if (isDouble) {
       // 두 번째 탭: 앞 문자 지우고 업그레이드 문자 입력
-      await _deleteBack();
-      await _commitText(_numberDoubleMap[key]!);
+      _deleteBack();
+      _commitText(_numberDoubleMap[key]!);
     } else {
-      await _commitText(key);
+      _commitText(key);
     }
   }
 
-  Future<void> _handleDotComma() async {
+  void _handleDotComma() {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final isDouble = _lastKey == '.,' && (nowMs - _lastKeyMs) < _doubleTapMs;
     _lastKey = '.,';
@@ -500,14 +516,14 @@ class _KeyboardViewState extends State<KeyboardView> {
 
     if (isDouble) {
       // 두 번째 탭: 앞의 '.'를 지우고 ','로 교체
-      await _deleteBack();
-      await _commitText(',');
+      _deleteBack();
+      _commitText(',');
     } else {
-      await _commitText('.');
+      _commitText('.');
     }
   }
 
-  Future<void> _handleKorean(String key) async {
+  void _handleKorean(String key) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final isRepeat = key == _lastKey && (nowMs - _lastKeyMs) < _doubleTapMs;
 
@@ -524,17 +540,17 @@ class _KeyboardViewState extends State<KeyboardView> {
       final upgraded3 = _keyUpgrade3[key]!;
       final replaced = _composer.replaceCurrentConsonant(upgraded3);
       if (replaced) {
-        await _replaceComposing(_composer.composing);
+        _replaceComposing(_composer.composing);
         return;
       }
       // 받침 위치에서는 ㅉ 불가 → 독립 자음으로 입력
       _composer.input(upgraded3);
       final pending = _composer.pending;
       if (pending.isNotEmpty) {
-        await _commitText(pending);
+        _commitText(pending);
         _composer.clearPending();
       }
-      await _setComposing(_composer.composing);
+      _setComposing(_composer.composing);
       return;
     }
 
@@ -548,16 +564,16 @@ class _KeyboardViewState extends State<KeyboardView> {
         replaced = _composer.replaceCurrentConsonant(upgraded);
       }
       if (replaced) {
-        await _replaceComposing(_composer.composing);
+        _replaceComposing(_composer.composing);
         return;
       }
       _composer.input(upgraded);
       final pending = _composer.pending;
       if (pending.isNotEmpty) {
-        await _commitText(pending);
+        _commitText(pending);
         _composer.clearPending();
       }
-      await _setComposing(_composer.composing);
+      _setComposing(_composer.composing);
       return;
     }
 
@@ -565,37 +581,37 @@ class _KeyboardViewState extends State<KeyboardView> {
     _composer.input(key);
     final pending = _composer.pending;
     if (pending.isNotEmpty) {
-      await _commitText(pending);
+      _commitText(pending);
       _composer.clearPending();
     }
-    await _setComposing(_composer.composing);
+    _setComposing(_composer.composing);
     // 키보드 UI 자체는 변하지 않으므로 setState 불필요
   }
 
-  Future<void> _onDelete() async {
+  void _onDelete() {
     if (_mode == KeyboardMode.korean) {
       final hadComposing = _composer.backspace();
       final pending = _composer.pending;
       if (pending.isNotEmpty) {
-        await _commitText(pending);
+        _commitText(pending);
         _composer.clearPending();
       }
-      await _setComposing(_composer.composing);
-      if (!hadComposing) await _deleteBack();
+      _setComposing(_composer.composing);
+      if (!hadComposing) _deleteBack();
       // 삭제 시 키보드 UI 자체는 변하지 않으므로 setState 불필요
     } else {
-      await _deleteBack();
+      _deleteBack();
     }
   }
 
-  Future<void> _commitKoreanAndSwitch(void Function() switchFn) async {
+  void _commitKoreanAndSwitch(void Function() switchFn) {
     if (_mode == KeyboardMode.korean) {
       final text = _composer.commitAll();
       if (_isPreview) {
         setState(() => _previewUpdate(_previewBase + text, ''));
       } else {
         // 원자적으로 composing commit + 종료 (두 단계 비동기 타이밍 문제 방지)
-        await _channel.invokeMethod('switchModeCommit', {'text': text});
+        _channel.invokeMethod('switchModeCommit', {'text': text});
       }
     }
     _ssangMode = false;
@@ -612,6 +628,8 @@ class _KeyboardViewState extends State<KeyboardView> {
         case KeyboardMode.korean:
           _mode = KeyboardMode.english;
         case KeyboardMode.english:
+          _mode = KeyboardMode.symbol;
+        case KeyboardMode.symbol:
           _mode = KeyboardMode.number;
         case KeyboardMode.emoji:
           _mode = _modeBeforeEmoji;
@@ -637,14 +655,14 @@ class _KeyboardViewState extends State<KeyboardView> {
 
   /// 쌍 버튼: 현재 조합 중인 자음이 있으면 즉시 쌍자음으로 업그레이드,
   /// 없으면 기존 모드 토글 (다음 자음을 쌍자음으로 입력).
-  Future<void> _onSsang() async {
+  void _onSsang() {
     final cur = _composer.currentConsonant;
     if (cur.isNotEmpty && _ssangMap.containsKey(cur)) {
       final doubled = _ssangMap[cur]!;
       if (_composer.replaceCurrentConsonant(doubled)) {
         _lastKey = null;
         _tapCount = 0;
-        await _replaceComposing(_composer.composing);
+        _replaceComposing(_composer.composing);
         return; // 조합 텍스트만 변경 → 키보드 UI 리빌드 불필요
       }
     }
@@ -1204,11 +1222,12 @@ class _KeyboardViewState extends State<KeyboardView> {
       KeyboardMode.number => _numberRows,
       KeyboardMode.korean => _koreanRows,
       KeyboardMode.english => _englishRows,
+      KeyboardMode.symbol => _symbolRows,
       KeyboardMode.emoji => _koreanRows,
     };
     return [
       // 숫자행 (숫자 모드에선 중복이므로 제외)
-      if (_showNumberRow && _mode != KeyboardMode.number)
+      if (_showNumberRow && _mode != KeyboardMode.number && _mode != KeyboardMode.symbol)
         Expanded(
           child: _KeyRow(
             keys: _numberRow,
@@ -1236,13 +1255,33 @@ class _KeyboardViewState extends State<KeyboardView> {
     ];
   }
 
+  Widget _buildEnterIcon() {
+    // imeAction: 0=UNSPECIFIED, 1=NONE → 줄바꿈, 2=GO, 3=SEARCH, 4=SEND, 5=NEXT, 6=DONE
+    switch (_imeAction) {
+      case 4: // SEND
+        return Icon(Icons.send, size: 20, color: _theme.actionKeyText);
+      case 3: // SEARCH
+        return Icon(Icons.search, size: 22, color: _theme.actionKeyText);
+      case 2: // GO
+        return Icon(Icons.arrow_forward, size: 22, color: _theme.actionKeyText);
+      case 5: // NEXT
+        return Icon(Icons.arrow_downward, size: 22, color: _theme.actionKeyText);
+      case 6: // DONE
+        return Icon(Icons.check, size: 22, color: _theme.actionKeyText);
+      default: // 0, 1 → 줄바꿈
+        return Icon(Icons.keyboard_return, size: 22, color: _theme.actionKeyText);
+    }
+  }
+
   Widget _buildBottomRow() {
     final isKorean = _mode == KeyboardMode.korean;
     final isEnglish = _mode == KeyboardMode.english;
+    final isSymbol = _mode == KeyboardMode.symbol;
 
     final modeLabel = switch (_mode) {
       KeyboardMode.korean => '한',
       KeyboardMode.english => 'EN',
+      KeyboardMode.symbol => '!#',
       KeyboardMode.number => '123',
       KeyboardMode.emoji => '한',
     };
@@ -1267,14 +1306,16 @@ class _KeyboardViewState extends State<KeyboardView> {
               ),
             ),
           ),
-          // 쌍자음(한국어) / 대문자(영어) / 빈칸(그 외)
+          // 쌍자음(한국어) / 대문자(영어) / ABC(기호) / 빈칸(그 외)
           _ActionKey(
             onTap: isKorean
                 ? _onSsang
                 : isEnglish
                     ? _onCaps
-                    : () {},
-            onTapDown: (isKorean || isEnglish) ? _triggerFeedback : () {},
+                    : isSymbol
+                        ? () => setState(() => _mode = KeyboardMode.english)
+                        : () {},
+            onTapDown: (isKorean || isEnglish || isSymbol) ? _triggerFeedback : () {},
             theme: _theme,
             flex: 3,
             active: isKorean ? _ssangMode : isEnglish ? _capsLock : false,
@@ -1288,7 +1329,13 @@ class _KeyboardViewState extends State<KeyboardView> {
                 : isEnglish
                     ? Icon(Icons.keyboard_capslock,
                         size: 20, color: _theme.actionKeyText)
-                    : const SizedBox(),
+                    : isSymbol
+                        ? Text('ABC',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: _theme.actionKeyText))
+                        : const SizedBox(),
           ),
           _ActionKey(
             onTap: () => _onKey(' '),
@@ -1304,8 +1351,7 @@ class _KeyboardViewState extends State<KeyboardView> {
             theme: _theme,
             flex: 3,
             animate: true,
-            child: Icon(Icons.keyboard_return,
-                size: 22, color: _theme.actionKeyText),
+            child: _buildEnterIcon(),
           ),
           _ActionKey(
             onTap: _onDelete,
@@ -1480,19 +1526,19 @@ class _CharKeyState extends State<_CharKey>
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: widget.horizontalPad),
-      child: GestureDetector(
+      child: Listener(
         behavior: HitTestBehavior.opaque,
-        onTapDown: (_) {
+        onPointerDown: (_) {
           widget.onTapDown();
           widget.onTap();
           if (widget.animate) _ctrl.forward();
           if (widget.showPopup) _showPopup();
         },
-        onTapUp: (_) {
+        onPointerUp: (_) {
           if (widget.animate) _ctrl.reverse();
           if (widget.showPopup) _hidePopup();
         },
-        onTapCancel: () {
+        onPointerCancel: (_) {
           if (widget.animate) _ctrl.reverse();
           if (widget.showPopup) _hidePopup();
         },
@@ -1500,17 +1546,15 @@ class _CharKeyState extends State<_CharKey>
           child: AnimatedBuilder(
           animation: _curve,
           builder: (ctx, child) {
-            final t = _curve.value; // may go slightly < 0 during easeOutBack
+            final t = _curve.value;
             final tC = t.clamp(0.0, 1.0);
-            // scale < 1 when pressed, bounces slightly above 1 on release
             final scale = 1.0 - 0.10 * t;
             return Transform(
               transform: Matrix4.identity()
                 ..translate(0.0, 4.0 * tC)
                 ..scale(scale),
               alignment: Alignment.center,
-              child: Container(
-                height: double.infinity,
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: Color.lerp(
                     widget.theme.charKey,
@@ -1518,16 +1562,19 @@ class _CharKeyState extends State<_CharKey>
                     tC,
                   ),
                   borderRadius: BorderRadius.circular(5),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color.fromRGBO(0, 0, 0, 0.38 * (1 - tC)),
-                      offset: Offset(0, (1 - tC) * 4),
-                      blurRadius: (1 - tC) * 4,
-                    ),
-                  ],
+                  boxShadow: tC < 0.99
+                      ? [
+                          BoxShadow(
+                            color: Color.fromRGBO(0, 0, 0, 0.3 * (1 - tC)),
+                            offset: Offset(0, (1 - tC) * 3),
+                            blurRadius: 3,
+                          ),
+                        ]
+                      : null,
                 ),
-                alignment: Alignment.center,
-                child: child,
+                child: SizedBox.expand(
+                  child: Center(child: child),
+                ),
               ),
             );
           },
@@ -1575,7 +1622,6 @@ class _ActionKey extends StatefulWidget {
 
 class _ActionKeyState extends State<_ActionKey>
     with SingleTickerProviderStateMixin {
-  bool _pressed = false;
   bool _repeatFired = false; // repeat이 실제로 발동됐는지 추적
   Timer? _repeatTimer;
   late final AnimationController _ctrl;
@@ -1642,23 +1688,26 @@ class _ActionKeyState extends State<_ActionKey>
           behavior: HitTestBehavior.opaque,
           onTapDown: (_) {
             widget.onTapDown();
-            setState(() => _pressed = true);
             if (widget.animate) _ctrl.forward();
-            if (widget.repeatOnHold) _repeatFired = false;
+            if (widget.repeatOnHold) {
+              _repeatFired = false;
+            } else if (widget.onLongPress == null) {
+              // 길게누름/반복 없는 일반 키: 즉시 실행
+              widget.onTap();
+            }
           },
           onTapUp: (_) {
-            setState(() => _pressed = false);
             if (widget.animate) _ctrl.reverse();
             if (widget.repeatOnHold) {
               final didRepeat = _repeatFired;
               _cancelRepeat();
               if (!didRepeat) widget.onTap();
-            } else {
+            } else if (widget.onLongPress != null) {
+              // longPress 지원 키: tapUp에서 실행 (longPress와 구분)
               widget.onTap();
             }
           },
           onTapCancel: () {
-            setState(() => _pressed = false);
             if (widget.animate) _ctrl.reverse();
             if (widget.repeatOnHold) _cancelRepeat();
           },
@@ -1669,7 +1718,6 @@ class _ActionKeyState extends State<_ActionKey>
                   widget.onLongPress!();
                 } : null),
           onLongPressEnd: (widget.repeatOnHold || widget.onLongPress != null) ? (_) {
-            setState(() => _pressed = false);
             _ctrl.reverse();
             if (widget.repeatOnHold) _cancelRepeat();
           } : null,
@@ -1684,21 +1732,24 @@ class _ActionKeyState extends State<_ActionKey>
                     ..translate(0.0, 4.0 * tC)
                     ..scale(1.0 - 0.09 * t),
                   alignment: Alignment.center,
-                  child: Container(
-                    height: 58,
+                  child: DecoratedBox(
                     decoration: BoxDecoration(
                       color: _bgColor(tC),
                       borderRadius: BorderRadius.circular(5),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color.fromRGBO(0, 0, 0, 0.38 * (1 - tC)),
-                          offset: Offset(0, (1 - tC) * 4),
-                          blurRadius: (1 - tC) * 4,
-                        ),
-                      ],
+                      boxShadow: tC < 0.99
+                          ? [
+                              BoxShadow(
+                                color: Color.fromRGBO(0, 0, 0, 0.3 * (1 - tC)),
+                                offset: Offset(0, (1 - tC) * 3),
+                                blurRadius: 3,
+                              ),
+                            ]
+                          : null,
                     ),
-                    alignment: Alignment.center,
-                    child: child,
+                    child: SizedBox(
+                      height: 58,
+                      child: Center(child: child),
+                    ),
                   ),
                 );
               },
