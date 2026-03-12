@@ -167,10 +167,11 @@ class FlutterImeService : InputMethodService() {
             fv.attachToFlutterEngine(engine)
         }
 
-        // SharedPreferences에서 실제 키보드 높이 읽기 (Flutter 기본값 350dp)
+        // SharedPreferences에서 실제 키보드 높이 읽기
+        // Flutter는 int를 Long으로 저장하므로 getLong 사용
         val density = resources.displayMetrics.density
         val prefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
-        val storedHeightDp = prefs.getInt("flutter.keyboardHeight", 350)
+        val storedHeightDp = prefs.getLong("flutter.keyboardHeight", 350L).toInt()
         val keyboardHeight = (storedHeightDp * density).toInt()
 
         // IME 윈도우 높이를 keyboardHeight로만 고정 (네비게이션 바 패딩 추가 시 앱 화면을 과도하게 가림)
@@ -222,7 +223,7 @@ class FlutterImeService : InputMethodService() {
         channel?.invokeMethod("reset", null)
         // 설정에서 높이가 바뀌었을 수 있으므로 매번 동기화
         val prefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
-        val heightDp = prefs.getInt("flutter.keyboardHeight", 350)
+        val heightDp = prefs.getLong("flutter.keyboardHeight", 350L).toInt()
         updateViewHeight(heightDp)
         // 네비게이션 바 높이를 Flutter에 전달 (Flutter 엔진 준비 후 전송)
         val navHeight = getNavBarHeightDp()
