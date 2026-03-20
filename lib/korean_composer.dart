@@ -67,6 +67,11 @@ class KoreanComposer {
   String _jung_ = '';  // vowel being composed
   String _jong_ = '';  // final consonant being composed
 
+  // 직전 확정된 음절의 상태 (더블탭 겹받침 병합용)
+  String _prevCho = '';
+  String _prevJung = '';
+  String _prevJong = '';
+
   /// Finalized syllables ready to be committed to InputConnection.
   String _pending = '';
 
@@ -94,7 +99,12 @@ class KoreanComposer {
 
   void _finalize() {
     final s = _build();
-    if (s.isNotEmpty) _pending += s;
+    if (s.isNotEmpty) {
+      _pending += s;
+      _prevCho = _cho_;
+      _prevJung = _jung_;
+      _prevJong = _jong_;
+    }
     _cho_ = ''; _jung_ = ''; _jong_ = '';
   }
 
@@ -239,15 +249,40 @@ class KoreanComposer {
     return '';
   }
 
+  /// 더블탭 업그레이드 후: 현재 홀로 선 초성을 직전 음절의 종성과 겹받침으로 병합 시도.
+  /// 예: "만" 확정 + "ㅎ" 조합 중 → "많" 조합 중으로 병합.
+  /// 성공하면 true 반환 — 호출자는 InputConnection에서 직전 확정 글자를 삭제해야 함.
+  bool tryMergeCompoundJong() {
+    // 현재 상태: 홀로 선 초성만 있고 중성/종성 없음
+    if (_cho_.isEmpty || _jung_.isNotEmpty || _jong_.isNotEmpty) return false;
+    // 직전에 확정된 음절이 있어야 함
+    if (_prevJung.isEmpty) return false;
+
+    final compound = _jongCombine[_prevJong]?[_cho_];
+    if (compound != null) {
+      // 병합: 직전 음절에 겹받침 적용
+      _cho_ = _prevCho;
+      _jung_ = _prevJung;
+      _jong_ = compound;
+      _prevCho = '';
+      _prevJung = '';
+      _prevJong = '';
+      return true;
+    }
+    return false;
+  }
+
   /// Commit everything and reset.
   String commitAll() {
     _finalize();
     final result = _pending;
     _pending = '';
+    _prevCho = ''; _prevJung = ''; _prevJong = '';
     return result;
   }
 
   void reset() {
     _cho_ = ''; _jung_ = ''; _jong_ = ''; _pending = '';
+    _prevCho = ''; _prevJung = ''; _prevJong = '';
   }
 }

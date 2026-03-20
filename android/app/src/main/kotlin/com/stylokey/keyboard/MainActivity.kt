@@ -181,9 +181,11 @@ class MainActivity : Activity() {
 
         previewFlutterView?.let { fv ->
             (fv.parent as? ViewGroup)?.removeView(fv)
+            val prefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+            val keyboardHeightDp = prefs.getLong("flutter.keyboardHeight", 430L).toInt()
             root.addView(fv, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(422)  // 텍스트창 72 + 키보드 350
+                dp(72 + keyboardHeightDp)  // 텍스트창 72 + 실제 키보드 높이
             ))
         }
 

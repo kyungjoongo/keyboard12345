@@ -252,14 +252,30 @@ class _KeyboardViewState extends State<KeyboardView> {
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     if (call.method == 'reset') {
       _composer.reset();
-      _mode = KeyboardMode.korean;
-      _modeBeforeEmoji = KeyboardMode.korean;
+      if (_mode == KeyboardMode.emoji) {
+        _mode = _modeBeforeEmoji;
+      }
       _lastKey = null;
       _tapCount = 0;
       _ssangMode = false;
       final args = call.arguments as Map?;
       _imeAction = (args?['imeAction'] as int?) ?? 0;
+      // 마지막 사용 모드 복원 (숫자/영문/한글)
+      final prefs = await SharedPreferences.getInstance();
+      final savedMode = prefs.getInt('lastKeyboardMode');
+      if (savedMode != null && savedMode >= 0 && savedMode < KeyboardMode.values.length) {
+        final m = KeyboardMode.values[savedMode];
+        if (m != KeyboardMode.emoji) {
+          _mode = m;
+          _modeBeforeEmoji = m;
+        }
+      }
       setState(() {});
+    } else if (call.method == 'cursorMoved') {
+      // 사용자가 커서를 composing 영역 밖으로 이동 → composer만 초기화 (모드 유지)
+      _composer.reset();
+      _lastKey = null;
+      _tapCount = 0;
     } else if (call.method == 'setNavBarHeight') {
       final h = (call.arguments as Map)['height'] as int? ?? 0;
       setState(() => _nativeNavBarHeight = h.toDouble());
@@ -270,7 +286,13 @@ class _KeyboardViewState extends State<KeyboardView> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final height = prefs.getInt('keyboardHeight') ?? 430;
+      final savedMode = prefs.getInt('lastKeyboardMode');
       setState(() {
+        if (savedMode != null && savedMode >= 0 && savedMode < KeyboardMode.values.length) {
+          _mode = KeyboardMode.values[savedMode];
+          if (_mode == KeyboardMode.emoji) _mode = KeyboardMode.korean;
+          _modeBeforeEmoji = _mode;
+        }
         _hapticEnabled = prefs.getBool('haptic') ?? true;
         _soundEnabled = prefs.getBool('sound') ?? false;
         _themeIndex = prefs.getInt('theme') ?? 0;
@@ -354,7 +376,9 @@ class _KeyboardViewState extends State<KeyboardView> {
   String? _lastKey;
   int _lastKeyMs = 0;
   int _tapCount = 0;
-  static const _doubleTapMs = 500;
+  static const _doubleTapMs = 300;
+  int _lastAnyKeyMs = 0;         // 모든 키 입력 디바운스용
+  static const _debounceMs = 0; // 25ms 이내 연속 터치 무시 (고스트 터치 방지)
 
   /// 숫자 모드 더블탭 업그레이드
   static const Map<String, String> _numberDoubleMap = {
@@ -472,6 +496,11 @@ class _KeyboardViewState extends State<KeyboardView> {
   // ── Key handlers ──────────────────────────────────────────────────────────
 
   void _onKey(String key) {
+    // 고스트 터치 방지: 25ms 이내 연속 터치 무시
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if ((now - _lastAnyKeyMs) < _debounceMs) return;
+    _lastAnyKeyMs = now;
+
     if (_mode == KeyboardMode.korean) {
       String actualKey = key;
       if (_ssangMode && _ssangMap.containsKey(key)) {
@@ -564,7 +593,14 @@ class _KeyboardViewState extends State<KeyboardView> {
         replaced = _composer.replaceCurrentConsonant(upgraded);
       }
       if (replaced) {
-        _replaceComposing(_composer.composing);
+        // 겹받침 병합 시도: "만" 확정 + "ㅎ" → "많" 으로 병합
+        if (!KoreanComposer.isVowel(key) && _composer.tryMergeCompoundJong()) {
+          // 직전 확정 글자 삭제 후 병합된 음절로 교체
+          _deleteBack();
+          _replaceComposing(_composer.composing);
+        } else {
+          _replaceComposing(_composer.composing);
+        }
         return;
       }
       _composer.input(upgraded);
@@ -618,6 +654,7 @@ class _KeyboardViewState extends State<KeyboardView> {
     _lastKey = null;  // 더블탭 상태 초기화 (모드 전환 후 오입력 방지)
     _tapCount = 0;
     setState(switchFn);
+    if (_mode != KeyboardMode.emoji) _saveInt('lastKeyboardMode', _mode.index);
   }
 
   void _onRotate() {
@@ -637,17 +674,42 @@ class _KeyboardViewState extends State<KeyboardView> {
     });
   }
 
+  void _setMode(KeyboardMode m) {
+    setState(() => _mode = m);
+    if (m != KeyboardMode.emoji) {
+      _saveInt('lastKeyboardMode', m.index);
+    }
+  }
+
   void _onLangToggle() {
     if (_mode == KeyboardMode.emoji) {
       _lastKey = null;
       _tapCount = 0;
-      setState(() => _mode = _modeBeforeEmoji);
+      _setMode(_modeBeforeEmoji);
       return;
     }
     _commitKoreanAndSwitch(() {
       _mode = _mode == KeyboardMode.korean
           ? KeyboardMode.english
           : KeyboardMode.korean;
+      _modeBeforeEmoji = _mode;
+    });
+  }
+
+  void _onSwitchToNumber() {
+    if (_mode == KeyboardMode.emoji) {
+      _lastKey = null;
+      _tapCount = 0;
+      _setMode(_modeBeforeEmoji);
+      return;
+    }
+    _commitKoreanAndSwitch(() {
+      if (_mode == KeyboardMode.number || _mode == KeyboardMode.symbol) {
+        _mode = _modeBeforeEmoji;
+      } else {
+        _modeBeforeEmoji = _mode;
+        _mode = KeyboardMode.number;
+      }
     });
   }
 
@@ -673,7 +735,7 @@ class _KeyboardViewState extends State<KeyboardView> {
     if (_mode == KeyboardMode.emoji) {
       _lastKey = null;
       _tapCount = 0;
-      setState(() => _mode = _modeBeforeEmoji);
+      _setMode(_modeBeforeEmoji);
     } else {
       _commitKoreanAndSwitch(() {
         _modeBeforeEmoji = _mode;
@@ -728,6 +790,7 @@ class _KeyboardViewState extends State<KeyboardView> {
       height: 32,
       child: Row(
         children: [
+          const Spacer(),
           // 이모지 토글
           GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -740,20 +803,6 @@ class _KeyboardViewState extends State<KeyboardView> {
               ),
             ),
           ),
-          // 클립보드
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _openClipboard,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Icon(
-                Icons.content_paste_rounded,
-                size: 16,
-                color: _theme.charKeyText.withOpacity(0.5),
-              ),
-            ),
-          ),
-          const Spacer(),
           // 설정
           GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -1277,30 +1326,46 @@ class _KeyboardViewState extends State<KeyboardView> {
     final isKorean = _mode == KeyboardMode.korean;
     final isEnglish = _mode == KeyboardMode.english;
     final isSymbol = _mode == KeyboardMode.symbol;
-
-    final modeLabel = switch (_mode) {
-      KeyboardMode.korean => '한',
-      KeyboardMode.english => 'EN',
-      KeyboardMode.symbol => '!#',
-      KeyboardMode.number => '123',
-      KeyboardMode.emoji => '한',
-    };
+    final isNumber = _mode == KeyboardMode.number;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
       child: Row(
         children: [
-          // 한/영/숫자 모드 순환 (탭 모드(0) vs 길게누름 모드(1))
+          // 한/영 전환 키
           _ActionKey(
-            onTap: _langToggleMode == 0 ? _onRotate : () {},
-            onLongPress: _langToggleMode == 1 ? _onRotate : null,
+            onTap: _onLangToggle,
             onTapDown: _triggerFeedback,
             theme: _theme,
-            flex: 4,
+            flex: 2,
+            active: isKorean,
             child: Text(
-              modeLabel,
+              isKorean ? '한' : 'EN',
               style: TextStyle(
-                fontSize: 14,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: _theme.actionKeyText,
+              ),
+            ),
+          ),
+          // 숫자/기호 전환 키
+          _ActionKey(
+            onTap: _onSwitchToNumber,
+            onLongPress: (isNumber || isSymbol)
+                ? () => _commitKoreanAndSwitch(() {
+                      _mode = isNumber
+                          ? KeyboardMode.symbol
+                          : KeyboardMode.number;
+                    })
+                : null,
+            onTapDown: _triggerFeedback,
+            theme: _theme,
+            flex: 2,
+            active: isNumber || isSymbol,
+            child: Text(
+              (isNumber || isSymbol) ? '가/a' : '123',
+              style: TextStyle(
+                fontSize: 13,
                 fontWeight: FontWeight.w600,
                 color: _theme.actionKeyText,
               ),
@@ -1313,11 +1378,11 @@ class _KeyboardViewState extends State<KeyboardView> {
                 : isEnglish
                     ? _onCaps
                     : isSymbol
-                        ? () => setState(() => _mode = KeyboardMode.english)
+                        ? () => _setMode(KeyboardMode.english)
                         : () {},
             onTapDown: (isKorean || isEnglish || isSymbol) ? _triggerFeedback : () {},
             theme: _theme,
-            flex: 3,
+            flex: 2,
             active: isKorean ? _ssangMode : isEnglish ? _capsLock : false,
             animate: true,
             child: isKorean
@@ -1349,7 +1414,7 @@ class _KeyboardViewState extends State<KeyboardView> {
             onTap: _sendAction,
             onTapDown: _triggerFeedback,
             theme: _theme,
-            flex: 3,
+            flex: 2,
             animate: true,
             child: _buildEnterIcon(),
           ),
@@ -1448,19 +1513,21 @@ class _CharKeyState extends State<_CharKey>
   OverlayEntry? _popupEntry;
   late final AnimationController _ctrl;
   late final CurvedAnimation _curve;
+  Offset? _downPos;          // 터치 시작 위치 (슬라이드 감지)
+  bool _cancelled = false;   // 슬라이드로 취소됨
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 35),
-      reverseDuration: const Duration(milliseconds: 200),
+      duration: const Duration(milliseconds: 25),
+      reverseDuration: const Duration(milliseconds: 140),
     );
     _curve = CurvedAnimation(
       parent: _ctrl,
-      curve: Curves.easeIn,
-      reverseCurve: Curves.easeOutBack,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeOutCubic,
     );
   }
 
@@ -1528,17 +1595,32 @@ class _CharKeyState extends State<_CharKey>
       padding: EdgeInsets.symmetric(horizontal: widget.horizontalPad),
       child: Listener(
         behavior: HitTestBehavior.opaque,
-        onPointerDown: (_) {
+        onPointerDown: (e) {
+          _downPos = e.localPosition;
+          _cancelled = false;
           widget.onTapDown();
           widget.onTap();
           if (widget.animate) _ctrl.forward();
           if (widget.showPopup) _showPopup();
         },
+        onPointerMove: (e) {
+          // 터치가 키 영역 밖으로 많이 벗어나면 팝업 숨김 (시각적 피드백)
+          if (_downPos != null && !_cancelled) {
+            final dx = (e.localPosition.dx - _downPos!.dx).abs();
+            final dy = (e.localPosition.dy - _downPos!.dy).abs();
+            if (dx > 30 || dy > 30) {
+              _cancelled = true;
+              if (widget.showPopup) _hidePopup();
+            }
+          }
+        },
         onPointerUp: (_) {
+          _downPos = null;
           if (widget.animate) _ctrl.reverse();
           if (widget.showPopup) _hidePopup();
         },
         onPointerCancel: (_) {
+          _downPos = null;
           if (widget.animate) _ctrl.reverse();
           if (widget.showPopup) _hidePopup();
         },
@@ -1548,10 +1630,10 @@ class _CharKeyState extends State<_CharKey>
           builder: (ctx, child) {
             final t = _curve.value;
             final tC = t.clamp(0.0, 1.0);
-            final scale = 1.0 - 0.10 * t;
+            final scale = 1.0 - 0.04 * t;
             return Transform(
               transform: Matrix4.identity()
-                ..translate(0.0, 4.0 * tC)
+                ..translate(0.0, 1.5 * tC)
                 ..scale(scale),
               alignment: Alignment.center,
               child: DecoratedBox(
@@ -1565,9 +1647,9 @@ class _CharKeyState extends State<_CharKey>
                   boxShadow: tC < 0.99
                       ? [
                           BoxShadow(
-                            color: Color.fromRGBO(0, 0, 0, 0.3 * (1 - tC)),
-                            offset: Offset(0, (1 - tC) * 3),
-                            blurRadius: 3,
+                            color: Color.fromRGBO(0, 0, 0, 0.25 * (1 - tC)),
+                            offset: Offset(0, (1 - tC) * 2),
+                            blurRadius: 2,
                           ),
                         ]
                       : null,
@@ -1623,6 +1705,7 @@ class _ActionKey extends StatefulWidget {
 class _ActionKeyState extends State<_ActionKey>
     with SingleTickerProviderStateMixin {
   bool _repeatFired = false; // repeat이 실제로 발동됐는지 추적
+  bool _firedOnDown = false; // onTapDown에서 onTap이 이미 실행됐는지 추적
   Timer? _repeatTimer;
   late final AnimationController _ctrl;
   late final CurvedAnimation _curve;
@@ -1632,13 +1715,13 @@ class _ActionKeyState extends State<_ActionKey>
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 35),
-      reverseDuration: const Duration(milliseconds: 200),
+      duration: const Duration(milliseconds: 25),
+      reverseDuration: const Duration(milliseconds: 140),
     );
     _curve = CurvedAnimation(
       parent: _ctrl,
-      curve: Curves.easeIn,
-      reverseCurve: Curves.easeOutBack,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeOutCubic,
     );
   }
 
@@ -1650,23 +1733,46 @@ class _ActionKeyState extends State<_ActionKey>
     super.dispose();
   }
 
+  int _repeatCount = 0;
+  Timer? _holdTimer; // longPress 대기 타이머 (200ms)
+
+  void _startHoldTimer() {
+    _holdTimer?.cancel();
+    _holdTimer = Timer(const Duration(milliseconds: 200), () {
+      if (mounted) _startRepeat();
+    });
+  }
+
   void _startRepeat() {
     if (_repeatFired) return;
     _repeatFired = true;
+    _repeatCount = 0;
     widget.onTap();
-    _repeatTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-      if (!mounted) {
-        _repeatTimer?.cancel();
-        return;
-      }
+    _scheduleNextRepeat();
+  }
+
+  void _scheduleNextRepeat() {
+    if (!mounted) return;
+    _repeatCount++;
+    // 가속 삭제: 처음 느리다가 점점 빨라짐
+    // 1~5회: 70ms, 6~15회: 40ms, 16회~: 20ms
+    final delay = _repeatCount <= 5 ? 70
+        : _repeatCount <= 15 ? 40
+        : 20;
+    _repeatTimer = Timer(Duration(milliseconds: delay), () {
+      if (!mounted) return;
       widget.onTapDown();
       widget.onTap();
+      _scheduleNextRepeat();
     });
   }
 
   void _cancelRepeat() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
     _repeatTimer?.cancel();
     _repeatTimer = null;
+    _repeatCount = 0;
   }
 
   Color _bgColor(double tC) {
@@ -1691,9 +1797,14 @@ class _ActionKeyState extends State<_ActionKey>
             if (widget.animate) _ctrl.forward();
             if (widget.repeatOnHold) {
               _repeatFired = false;
+              _firedOnDown = false;
+              _startHoldTimer(); // 200ms 후 반복 삭제 시작
             } else if (widget.onLongPress == null) {
               // 길게누름/반복 없는 일반 키: 즉시 실행
+              _firedOnDown = true;
               widget.onTap();
+            } else {
+              _firedOnDown = false;
             }
           },
           onTapUp: (_) {
@@ -1702,24 +1813,26 @@ class _ActionKeyState extends State<_ActionKey>
               final didRepeat = _repeatFired;
               _cancelRepeat();
               if (!didRepeat) widget.onTap();
-            } else if (widget.onLongPress != null) {
+            } else if (!_firedOnDown && widget.onLongPress != null) {
               // longPress 지원 키: tapUp에서 실행 (longPress와 구분)
+              // _firedOnDown 체크: 모드 전환으로 onLongPress가 생겼어도 이중 실행 방지
               widget.onTap();
             }
+            _firedOnDown = false;
           },
           onTapCancel: () {
             if (widget.animate) _ctrl.reverse();
             if (widget.repeatOnHold) _cancelRepeat();
+            _firedOnDown = false;
           },
-          // 길게누름 지원 (repeatOnHold: 빠른 반복 삭제 / onLongPress: 커스텀 액션)
-          onLongPress: widget.repeatOnHold ? _startRepeat
+          // 길게누름 지원 (repeatOnHold는 자체 타이머 사용 / onLongPress: 커스텀 액션)
+          onLongPress: widget.repeatOnHold ? null
               : (widget.onLongPress != null ? () {
                   widget.onTapDown();
                   widget.onLongPress!();
                 } : null),
-          onLongPressEnd: (widget.repeatOnHold || widget.onLongPress != null) ? (_) {
+          onLongPressEnd: (widget.onLongPress != null && !widget.repeatOnHold) ? (_) {
             _ctrl.reverse();
-            if (widget.repeatOnHold) _cancelRepeat();
           } : null,
           child: RepaintBoundary( // 액션키 애니메이션 격리
             child: AnimatedBuilder(
@@ -1729,8 +1842,8 @@ class _ActionKeyState extends State<_ActionKey>
                 final tC = t.clamp(0.0, 1.0);
                 return Transform(
                   transform: Matrix4.identity()
-                    ..translate(0.0, 4.0 * tC)
-                    ..scale(1.0 - 0.09 * t),
+                    ..translate(0.0, 1.5 * tC)
+                    ..scale(1.0 - 0.04 * t),
                   alignment: Alignment.center,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
@@ -1739,9 +1852,9 @@ class _ActionKeyState extends State<_ActionKey>
                       boxShadow: tC < 0.99
                           ? [
                               BoxShadow(
-                                color: Color.fromRGBO(0, 0, 0, 0.3 * (1 - tC)),
-                                offset: Offset(0, (1 - tC) * 3),
-                                blurRadius: 3,
+                                color: Color.fromRGBO(0, 0, 0, 0.25 * (1 - tC)),
+                                offset: Offset(0, (1 - tC) * 2),
+                                blurRadius: 2,
                               ),
                             ]
                           : null,

@@ -234,6 +234,21 @@ class FlutterImeService : InputMethodService() {
         }, 200)
     }
 
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int,
+        newSelStart: Int, newSelEnd: Int,
+        candidatesStart: Int, candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // composing 영역이 있는 상태에서 커서가 composing 끝 위치 밖으로 이동하면
+        // (사용자가 직접 커서를 옮긴 것) → composing 확정 + composer 초기화
+        if (candidatesStart >= 0 && candidatesEnd >= 0 &&
+            (newSelStart != newSelEnd || newSelEnd != candidatesEnd)) {
+            currentInputConnection?.finishComposingText()
+            channel?.invokeMethod("cursorMoved", null)
+        }
+    }
+
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         flutterEngine?.lifecycleChannel?.appIsPaused()
