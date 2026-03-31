@@ -96,11 +96,20 @@ class _PreviewEmbedAppState extends State<_PreviewEmbedApp> {
   }
 }
 
-// ── IME 서비스 진입점 (FlutterImeService 전용) ───────────────────────────────
+// ── IME 서비스 진입점 (FlutterImeService 전용, Android) ──────────────────────
 
 @pragma('vm:entry-point')
 void imeMain() async {
   await _initApp();
+  runApp(const _ImeApp());
+}
+
+// ── iOS 키보드 익스텐션 진입점 ────────────────────────────────────────────────
+// Firebase를 초기화하지 않습니다 (키보드 익스텐션은 Firebase 사용 불가).
+
+@pragma('vm:entry-point')
+void iosImeMain() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const _ImeApp());
 }
 

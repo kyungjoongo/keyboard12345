@@ -110,6 +110,24 @@ class FlutterImeService : InputMethodService() {
                             updateViewHeight(heightDp)
                             result.success(null)
                         }
+                        "getTextBeforeCursor" -> {
+                            val length = call.argument<Int>("length") ?: 100
+                            withInputConnection { ic ->
+                                val text = ic.getTextBeforeCursor(length, 0)
+                                result.success(text?.toString() ?: "")
+                            }
+                        }
+                        "replaceTextBeforeCursor" -> {
+                            val oldLen = call.argument<Int>("oldLen") ?: 0
+                            val newText = call.argument<String>("newText") ?: ""
+                            withInputConnection { ic ->
+                                ic.beginBatchEdit()
+                                ic.deleteSurroundingText(oldLen, 0)
+                                ic.commitText(newText, 1)
+                                ic.endBatchEdit()
+                            }
+                            result.success(null)
+                        }
                         "performEditorAction" -> {
                             val opts = currentInputEditorInfo?.imeOptions
                                 ?: EditorInfo.IME_ACTION_DONE

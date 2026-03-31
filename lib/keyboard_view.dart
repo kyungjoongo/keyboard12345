@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'korean_composer.dart';
+import 'ai_service.dart';
 
 const _channel = MethodChannel('com.example.keyboard12345/ime');
 
@@ -180,6 +181,8 @@ class _KeyboardViewState extends State<KeyboardView> {
   KeyboardMode _modeBeforeEmoji = KeyboardMode.korean;
   bool _capsLock = false;
   final KoreanComposer _composer = KoreanComposer();
+  final AiService _aiService = AiService();
+  bool _aiLoading = false;
 
   // ── IME Action (앱이 요청하는 엔터키 동작) ─────────────────────────────
   // 0=NONE(줄바꿈), 1=NONE, 2=GO, 3=SEARCH, 4=SEND, 5=NEXT, 6=DONE
@@ -187,9 +190,10 @@ class _KeyboardViewState extends State<KeyboardView> {
 
   // ── Settings ──────────────────────────────────────────────────────────────
   bool _showingSettings = false;
-  bool _hapticEnabled = true;
+  bool _hapticEnabled = false;
   bool _soundEnabled = false;
   int _themeIndex = 0;
+
   // 키보드 높이 (280~440dp)
   int _keyboardHeight = 430;
   // 숫자행 항상 표시
@@ -202,6 +206,9 @@ class _KeyboardViewState extends State<KeyboardView> {
   double _soundVolume = 0.5;
   // 소리 테마: 0=기본, 1=타자기, 2=부드러움
   int _soundTheme = 0;
+
+  // 키보드 레이아웃: 'standard' (천지인/단모음 혼합 느낌의 기존 레이아웃), 'full' (두벌식 풀 키보드)
+  String _layoutType = 'standard';
 
   // ── Clipboard ─────────────────────────────────────────────────────────────
   List<String> _clipboardHistory = [];
@@ -261,14 +268,19 @@ class _KeyboardViewState extends State<KeyboardView> {
       final args = call.arguments as Map?;
       _imeAction = (args?['imeAction'] as int?) ?? 0;
       // 마지막 사용 모드 복원 (숫자/영문/한글)
-      final prefs = await SharedPreferences.getInstance();
-      final savedMode = prefs.getInt('lastKeyboardMode');
-      if (savedMode != null && savedMode >= 0 && savedMode < KeyboardMode.values.length) {
-        final m = KeyboardMode.values[savedMode];
-        if (m != KeyboardMode.emoji) {
-          _mode = m;
-          _modeBeforeEmoji = m;
+      // iOS 키보드 익스텐션은 shared_preferences 미등록 환경일 수 있으므로 try-catch 처리
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final savedMode = prefs.getInt('lastKeyboardMode');
+        if (savedMode != null && savedMode >= 0 && savedMode < KeyboardMode.values.length) {
+          final m = KeyboardMode.values[savedMode];
+          if (m != KeyboardMode.emoji) {
+            _mode = m;
+            _modeBeforeEmoji = m;
+          }
         }
+      } catch (_) {
+        // 플러그인 미등록 환경(iOS 익스텐션 등)에서는 기본 모드 유지
       }
       setState(() {});
     } else if (call.method == 'cursorMoved') {
@@ -293,7 +305,7 @@ class _KeyboardViewState extends State<KeyboardView> {
           if (_mode == KeyboardMode.emoji) _mode = KeyboardMode.korean;
           _modeBeforeEmoji = _mode;
         }
-        _hapticEnabled = prefs.getBool('haptic') ?? true;
+        _hapticEnabled = prefs.getBool('haptic') ?? false;
         _soundEnabled = prefs.getBool('sound') ?? false;
         _themeIndex = prefs.getInt('theme') ?? 0;
         _keyboardHeight = height;
@@ -302,6 +314,7 @@ class _KeyboardViewState extends State<KeyboardView> {
         _hapticLevel = prefs.getInt('hapticLevel') ?? 1;
         _soundVolume = prefs.getDouble('soundVolume') ?? 0.5;
         _soundTheme = prefs.getInt('soundTheme') ?? 0;
+        _layoutType = prefs.getString('layoutType') ?? 'standard';
         _clipboardHistory = prefs.getStringList('clipboardHistory') ?? [];
       });
       // 네이티브 뷰 높이 동기화 (키보드가 앱 화면 가리는 문제 방지)
@@ -326,6 +339,11 @@ class _KeyboardViewState extends State<KeyboardView> {
   Future<void> _saveDouble(String key, double value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(key, value);
+  }
+
+  Future<void> _saveString(String key, String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, value);
   }
 
   void _triggerFeedback() {
@@ -383,8 +401,9 @@ class _KeyboardViewState extends State<KeyboardView> {
   /// 숫자 모드 더블탭 업그레이드
   static const Map<String, String> _numberDoubleMap = {
     '-': '_',
-    '+': '!',
-    '=': '?',
+    '+': '=',
+    '!': '%',
+    '?': '&',
   };
 
   /// 2번 탭 → 획 추가 (격음/장음)
@@ -406,15 +425,21 @@ class _KeyboardViewState extends State<KeyboardView> {
   static const _numberRow = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 
   static const _numberRows = [
-    ['1', '2', '3', '*', '+', '/', '('],
-    ['4', '5', '6', '#', '-', '=', ')'],
-    ['7', '8', '9', '0', '@', '.', '~'],
+    ['1', '2', '3', '!', '?', '/', '('],
+    ['4', '5', '6', '#', '-', '+', ')'],
+    ['7', '8', '9', '0', '@', '.', '*'],
   ];
 
   static const _koreanRows = [
     ['ㄱ', 'ㄴ', 'ㄷ', 'ㅏ', 'ㅓ'],
     ['ㄹ', 'ㅁ', 'ㅂ', 'ㅡ', 'ㅣ'],
     ['ㅅ', 'ㅇ', 'ㅈ', 'ㅗ', 'ㅜ'],
+  ];
+
+  static const _koreanFullRows = [
+    ['ㅂ', 'ㅈ', 'ㄷ', 'ㄱ', 'ㅅ', 'ㅛ', 'ㅕ', 'ㅑ', 'ㅐ', 'ㅔ'],
+    ['ㅁ', 'ㄴ', 'ㅇ', 'ㄹ', 'ㅎ', 'ㅗ', 'ㅓ', 'ㅏ', 'ㅣ'],
+    ['ㅋ', 'ㅌ', 'ㅊ', 'ㅍ', 'ㅠ', 'ㅜ', 'ㅡ'],
   ];
 
   static const _englishRows = [
@@ -553,6 +578,17 @@ class _KeyboardViewState extends State<KeyboardView> {
   }
 
   void _handleKorean(String key) {
+    if (_layoutType == 'full') {
+      // 풀키보드(두벌식)에서는 더블탭 획추가 기능을 끕니다.
+      _composer.input(key);
+      final pending = _composer.pending;
+      if (pending.isNotEmpty) {
+        _commitText(pending);
+        _composer.clearPending();
+      }
+      _setComposing(_composer.composing);
+      return;
+    }
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final isRepeat = key == _lastKey && (nowMs - _lastKeyMs) < _doubleTapMs;
 
@@ -744,6 +780,48 @@ class _KeyboardViewState extends State<KeyboardView> {
     }
   }
 
+  Future<void> _onAiCorrect() async {
+    if (_aiLoading) return;
+    if (_mode == KeyboardMode.korean) {
+      final text = _composer.commitAll();
+      if (text.isNotEmpty) {
+        if (_isPreview) {
+          _previewUpdate(_previewBase + text, '');
+        } else {
+          await _channel.invokeMethod('commitText', {'text': text});
+        }
+      }
+    }
+    setState(() => _aiLoading = true);
+    _triggerFeedback();
+    try {
+      String original = "";
+      if (_isPreview) {
+        original = widget.previewController?.text ?? "";
+      } else {
+        original = await _channel.invokeMethod('getTextBeforeCursor', {'length': 100}) ?? "";
+      }
+      if (original.trim().isEmpty) {
+        setState(() => _aiLoading = false);
+        return;
+      }
+      final refined = await _aiService.correctTypo(original);
+      if (_isPreview) {
+        widget.previewController?.text = refined;
+        _previewComposing = "";
+      } else {
+        await _channel.invokeMethod('replaceTextBeforeCursor', {
+          'oldLen': original.length,
+          'newText': refined,
+        });
+      }
+    } catch (e) {
+      debugPrint("AI Correct Error: $e");
+    } finally {
+      setState(() => _aiLoading = false);
+    }
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -790,6 +868,21 @@ class _KeyboardViewState extends State<KeyboardView> {
       height: 32,
       child: Row(
         children: [
+          // AI 오타 교정 버튼
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _onAiCorrect,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: _aiLoading
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.green),
+                    )
+                  : const Icon(Icons.spellcheck, size: 17, color: Colors.green),
+            ),
+          ),
           const Spacer(),
           // 이모지 토글
           GestureDetector(
@@ -871,7 +964,7 @@ class _KeyboardViewState extends State<KeyboardView> {
               return GestureDetector(
                 onTap: () {
                   _triggerFeedback();
-                  _channel.invokeMethod('commitText', {'text': emoji});
+                  _commitText(emoji);
                 },
                 child: Container(
                   alignment: Alignment.center,
@@ -1258,6 +1351,26 @@ class _KeyboardViewState extends State<KeyboardView> {
               ),
             ),
           ],
+          const Divider(height: 8),
+
+          // ── 키보드 레이아웃 ──────────────────────────────────────────────
+          _settingLabel('키보드 레이아웃'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: Row(
+              children: [
+                _segmentButton('일반', 0, _layoutType == 'standard' ? 0 : 1, (v) {
+                  setState(() => _layoutType = v == 0 ? 'standard' : 'full');
+                  _saveString('layoutType', v == 0 ? 'standard' : 'full');
+                }),
+                const SizedBox(width: 8),
+                _segmentButton('두벌식 풀', 1, _layoutType == 'standard' ? 0 : 1, (v) {
+                  setState(() => _layoutType = v == 0 ? 'standard' : 'full');
+                  _saveString('layoutType', v == 0 ? 'standard' : 'full');
+                }),
+              ],
+            ),
+          ),
           const SizedBox(height: 12),
         ],
       ),
@@ -1269,10 +1382,10 @@ class _KeyboardViewState extends State<KeyboardView> {
   List<Widget> _buildMainRows() {
     final rows = switch (_mode) {
       KeyboardMode.number => _numberRows,
-      KeyboardMode.korean => _koreanRows,
+      KeyboardMode.korean => _layoutType == 'full' ? _koreanFullRows : _koreanRows,
       KeyboardMode.english => _englishRows,
       KeyboardMode.symbol => _symbolRows,
-      KeyboardMode.emoji => _koreanRows,
+      KeyboardMode.emoji => _layoutType == 'full' ? _koreanFullRows : _koreanRows,
     };
     return [
       // 숫자행 (숫자 모드에선 중복이므로 제외)
