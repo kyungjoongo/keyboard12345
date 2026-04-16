@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'korean_composer.dart';
-import 'ai_service.dart';
 
 const _channel = MethodChannel('com.example.keyboard12345/ime');
 
@@ -181,8 +180,6 @@ class _KeyboardViewState extends State<KeyboardView> {
   KeyboardMode _modeBeforeEmoji = KeyboardMode.korean;
   bool _capsLock = false;
   final KoreanComposer _composer = KoreanComposer();
-  final AiService _aiService = AiService();
-  bool _aiLoading = false;
 
   // ── IME Action (앱이 요청하는 엔터키 동작) ─────────────────────────────
   // 0=NONE(줄바꿈), 1=NONE, 2=GO, 3=SEARCH, 4=SEND, 5=NEXT, 6=DONE
@@ -209,6 +206,8 @@ class _KeyboardViewState extends State<KeyboardView> {
 
   // 키보드 레이아웃: 'standard' (천지인/단모음 혼합 느낌의 기존 레이아웃), 'full' (두벌식 풀 키보드)
   String _layoutType = 'standard';
+  // 일반 레이아웃 연타 업그레이드(2/3탭 획/된소리)
+  bool _multiTapUpgradeEnabled = true;
 
   // ── Clipboard ─────────────────────────────────────────────────────────────
   List<String> _clipboardHistory = [];
@@ -315,6 +314,7 @@ class _KeyboardViewState extends State<KeyboardView> {
         _soundVolume = prefs.getDouble('soundVolume') ?? 0.5;
         _soundTheme = prefs.getInt('soundTheme') ?? 0;
         _layoutType = prefs.getString('layoutType') ?? 'standard';
+        _multiTapUpgradeEnabled = prefs.getBool('multiTapUpgradeEnabled') ?? true;
         _clipboardHistory = prefs.getStringList('clipboardHistory') ?? [];
       });
       // 네이티브 뷰 높이 동기화 (키보드가 앱 화면 가리는 문제 방지)
@@ -395,8 +395,8 @@ class _KeyboardViewState extends State<KeyboardView> {
   int _lastKeyMs = 0;
   int _tapCount = 0;
   static const _doubleTapMs = 300;
-  int _lastAnyKeyMs = 0;         // 모든 키 입력 디바운스용
-  static const _debounceMs = 0; // 25ms 이내 연속 터치 무시 (고스트 터치 방지)
+  int _lastAnyKeyMs = 0; // 모든 키 입력 디바운스용
+  static const _debounceMs = 25; // 25ms 이내 연속 터치 무시 (고스트 터치 방지)
 
   /// 숫자 모드 더블탭 업그레이드
   static const Map<String, String> _numberDoubleMap = {
@@ -578,8 +578,8 @@ class _KeyboardViewState extends State<KeyboardView> {
   }
 
   void _handleKorean(String key) {
-    if (_layoutType == 'full') {
-      // 풀키보드(두벌식)에서는 더블탭 획추가 기능을 끕니다.
+    if (_layoutType == 'full' || !_multiTapUpgradeEnabled) {
+      // 풀키보드이거나 연타 업그레이드 옵션이 꺼진 경우: 일반 두벌식 입력만 처리
       _composer.input(key);
       final pending = _composer.pending;
       if (pending.isNotEmpty) {
@@ -780,48 +780,6 @@ class _KeyboardViewState extends State<KeyboardView> {
     }
   }
 
-  Future<void> _onAiCorrect() async {
-    if (_aiLoading) return;
-    if (_mode == KeyboardMode.korean) {
-      final text = _composer.commitAll();
-      if (text.isNotEmpty) {
-        if (_isPreview) {
-          _previewUpdate(_previewBase + text, '');
-        } else {
-          await _channel.invokeMethod('commitText', {'text': text});
-        }
-      }
-    }
-    setState(() => _aiLoading = true);
-    _triggerFeedback();
-    try {
-      String original = "";
-      if (_isPreview) {
-        original = widget.previewController?.text ?? "";
-      } else {
-        original = await _channel.invokeMethod('getTextBeforeCursor', {'length': 100}) ?? "";
-      }
-      if (original.trim().isEmpty) {
-        setState(() => _aiLoading = false);
-        return;
-      }
-      final refined = await _aiService.correctTypo(original);
-      if (_isPreview) {
-        widget.previewController?.text = refined;
-        _previewComposing = "";
-      } else {
-        await _channel.invokeMethod('replaceTextBeforeCursor', {
-          'oldLen': original.length,
-          'newText': refined,
-        });
-      }
-    } catch (e) {
-      debugPrint("AI Correct Error: $e");
-    } finally {
-      setState(() => _aiLoading = false);
-    }
-  }
-
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -863,39 +821,11 @@ class _KeyboardViewState extends State<KeyboardView> {
   // ── 상단 툴바 ─────────────────────────────────────────────────────────────
 
   Widget _buildToolbar() {
-    final isEmoji = _mode == KeyboardMode.emoji;
     return SizedBox(
       height: 32,
       child: Row(
         children: [
-          // AI 오타 교정 버튼
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _onAiCorrect,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: _aiLoading
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.green),
-                    )
-                  : const Icon(Icons.spellcheck, size: 17, color: Colors.green),
-            ),
-          ),
           const Spacer(),
-          // 이모지 토글
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _toggleEmoji,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: Text(
-                isEmoji ? '⌨️' : '😊',
-                style: const TextStyle(fontSize: 17),
-              ),
-            ),
-          ),
           // 설정
           GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -1371,6 +1301,27 @@ class _KeyboardViewState extends State<KeyboardView> {
               ],
             ),
           ),
+          const Divider(height: 8),
+
+          // ── 일반 레이아웃 연타 업그레이드 ─────────────────────────────────
+          SwitchListTile(
+            dense: true,
+            title: Text('연타 업그레이드(획/된소리)',
+                style: TextStyle(fontSize: 15, color: _theme.charKeyText)),
+            subtitle: Text(
+              '빠른 타건 시 오입력이 있으면 꺼두세요',
+              style: TextStyle(
+                fontSize: 12,
+                color: _theme.charKeyText.withOpacity(0.6),
+              ),
+            ),
+            activeColor: _theme.actionKey,
+            value: _multiTapUpgradeEnabled,
+            onChanged: (v) {
+              setState(() => _multiTapUpgradeEnabled = v);
+              _saveBool('multiTapUpgradeEnabled', v);
+            },
+          ),
           const SizedBox(height: 12),
         ],
       ),
@@ -1440,6 +1391,7 @@ class _KeyboardViewState extends State<KeyboardView> {
     final isEnglish = _mode == KeyboardMode.english;
     final isSymbol = _mode == KeyboardMode.symbol;
     final isNumber = _mode == KeyboardMode.number;
+    final isEmoji = _mode == KeyboardMode.emoji;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
@@ -1519,9 +1471,21 @@ class _KeyboardViewState extends State<KeyboardView> {
             onTap: () => _onKey(' '),
             onTapDown: _triggerFeedback,
             theme: _theme,
-            flex: 5,
+            flex: 4,
             animate: true,
             child: const Text(' ', style: TextStyle(fontSize: 14)),
+          ),
+          _ActionKey(
+            onTap: _toggleEmoji,
+            onTapDown: _triggerFeedback,
+            theme: _theme,
+            flex: 1,
+            active: isEmoji,
+            animate: true,
+            child: Text(
+              isEmoji ? '⌨️' : '😊',
+              style: const TextStyle(fontSize: 16),
+            ),
           ),
           _ActionKey(
             onTap: _sendAction,
